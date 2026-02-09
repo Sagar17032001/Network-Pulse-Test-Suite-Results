@@ -1,0 +1,624 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Network QoE Dashboard</title>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+
+
+  <style>
+    :root {
+      --bg: #f4f7fb;
+      --card: #ffffff;
+      --text: #0b1f33;
+      --muted: #6b7a90;
+      --accent: #0b69ff;
+    }
+
+    body {
+      margin: 0;
+      padding: 24px;
+      font-family: Inter, system-ui;
+      background: var(--bg);
+      color: var(--text)
+    }
+
+    .page {
+      max-width: 1300px;
+      margin: auto
+    }
+
+    h3 {
+      margin: 0 0 6px
+    }
+
+    .small {
+      font-size: 13px;
+      color: var(--muted)
+    }
+
+    .grid {
+      display: grid;
+      gap: 16px
+    }
+
+    .card {
+      background: var(--card);
+      padding: 16px;
+      border-radius: 14px;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, .06)
+    }
+
+    .chart-box {
+      height: 260px;
+      position: relative
+    }
+
+    canvas {
+      position: absolute;
+      inset: 0
+    }
+
+    .kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 14px;
+    }
+
+    .kpi {
+      background: #f8fafc;
+      padding: 14px;
+      border-radius: 12px;
+      border-left: 4px solid var(--accent)
+    }
+
+    .kpi .label {
+      font-size: 13px;
+      color: var(--muted)
+    }
+
+    .kpi .value {
+      font-size: 20px;
+      font-weight: 700
+    }
+
+    button {
+      padding: 8px 14px;
+      border-radius: 8px;
+      border: none;
+      background: var(--accent);
+      color: #fff;
+      font-weight: 600;
+      cursor: pointer
+    }
+
+    .controls {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 16px;
+      flex-wrap: wrap;
+      gap: 12px
+    }
+
+    input[type=date] {
+      padding: 6px 10px;
+      border-radius: 6px;
+      border: 1px solid #ccc
+    }
+
+    .user-box {
+      background: var(--card);
+      padding: 10px;
+      border-radius: 10px;
+      max-height: 160px;
+      overflow: auto;
+      border: 1px solid #e5e7eb
+    }
+
+    .user-box label {
+      display: block;
+      font-size: 13px;
+      margin-bottom: 4px
+    }
+
+    #loader {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, .6);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 9999;
+      color: #fff;
+      font-size: 18px
+    }
+
+    .section-title {
+      font-size: 15px;
+      font-weight: 700;
+      margin: 18px 0 8px;
+      padding-bottom: 6px;
+      border-bottom: 2px solid #e6edf7;
+      color: #0b1f33;
+    }
+
+    .kpi-grid.compact {
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 10px;
+    }
+
+    .kpi {
+      background: #f9fbff;
+      padding: 10px 12px;
+      border-radius: 10px;
+      border-left: 4px solid var(--accent);
+    }
+
+    .kpi .label {
+      font-size: 12px;
+      color: #6b7a90;
+    }
+
+    .kpi .value {
+      font-size: 17px;
+      font-weight: 700;
+      margin-top: 2px;
+    }
+
+    .kpi .unit {
+      font-size: 11px;
+      color: #9aa7bd;
+    }
+
+    .summary-card {
+      background: #fff;
+      padding: 18px;
+      border-radius: 14px;
+      box-shadow: 0 6px 20px rgba(0, 0, 0, .05);
+    }
+  </style>
+</head>
+
+<body>
+
+  <div id="loader">Loading QoE data…</div>
+
+  <div class="page">
+
+    <div class="controls">
+      <div>
+        <h2>Network QoE Dashboard</h2>
+        <div class="small">Select one or multiple users</div>
+        <div id="userBox" class="user-box"></div>
+      </div>
+
+      <div>
+        From <input type="date" id="fromDate"><br><br>
+        To <input type="date" id="toDate"><br><br>
+        <button onclick="applyFilter()">Apply</button>
+        <button onclick="exportPDF()">PDF</button>
+      </div>
+    </div>
+
+    <div class="card small" id="contextInfo"></div>
+    <div id="main" class="grid"></div>
+
+  </div>
+
+  <script>
+    const API_URL = 'https://qoe-backend-zr50.onrender.com/api/users/results';
+    let ALL_DATA = [];
+
+    const toDate = t => t ? new Date(t) : null;
+    const avg = a => a.length ? (a.reduce((s, x) => s + x.v, 0) / a.length).toFixed(2) : 0;
+
+    function seriesFor(r, path) {
+      return r
+        .sort((a, b) => new Date(a.ts) - new Date(b.ts))
+        .map(x => {
+          let v = x;
+          path.forEach(k => v = v?.[k]);
+
+          return {
+            t: toDate(x.ts),
+            v: Number(v ?? NaN),
+            user: x.email || "Unknown"
+          };
+        })
+        .filter(x => x.t && !isNaN(x.v));
+    }
+
+
+    function drawLine(id, pts, unit, color) {
+  const c = document.getElementById(id);
+  if (!c) return;
+  if (c._chart) c._chart.destroy();
+
+  const values = pts.map(p => p.v);
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const range = max - min || 1;
+
+  c._chart = new Chart(c, {
+    type: 'bar',
+    data: {
+      labels: pts.map(p => [p.user, p.t.toLocaleString()]),
+      datasets: [{
+        label: unit,
+        data: values,
+        backgroundColor: color,
+        borderRadius: 4,
+        barThickness: 10,
+
+        // 🔥 ensures tiny values still visible
+        minBarLength: 8
+      }]
+    },
+
+    options: {
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        title: {
+          display: true,
+          text: unit,
+          font: { size: 14, weight: 'bold' }
+        },
+
+        // 🔥 SHOW VALUES ABOVE BARS
+        tooltip: {
+          callbacks: {
+            label: ctx => `${ctx.raw} ${unit}`
+          }
+        }
+      },
+
+      scales: {
+        y: {
+          beginAtZero: false,
+
+          // 🔥 ZOOM into data range
+          min: min - range * 0.2,
+          max: max + range * 0.25,
+
+          title: { display: true, text: unit },
+
+          ticks: {
+            precision: 2
+          }
+        },
+
+        x: {
+          ticks: {
+            font: { size: 8 },
+            maxRotation: 45,
+            minRotation: 45
+          }
+        }
+      }
+    },
+
+    // 🔥 DRAW VALUE LABELS ABOVE BARS
+    plugins: [{
+      id: 'valueLabels',
+      afterDatasetsDraw(chart) {
+        const { ctx } = chart;
+        ctx.save();
+        ctx.font = '5px Arial';
+        ctx.fillStyle = '#0b1f33';
+        ctx.textAlign = 'center';
+
+        chart.getDatasetMeta(0).data.forEach((bar, i) => {
+          const val = values[i];
+          ctx.fillText(val.toFixed(2), bar.x, bar.y - 6);
+        });
+
+        ctx.restore();
+      }
+    }]
+  });
+}
+
+
+    //   function drawLine(id, pts, unit, color) {
+    //   const c = document.getElementById(id);
+    //   if (!c) return;
+    //   if (c._chart) c._chart.destroy();
+
+    //   c._chart = new Chart(c, {
+    //     type: 'line',
+    //     data: {
+    //       labels: pts.map(p => `${p.t.toLocaleString()} | ${p.user}`),
+    //       datasets: [{
+    //         label: unit,
+    //         data: pts.map(p => p.v),
+    //         borderColor: color,
+    //         backgroundColor: color + "22",
+    //         borderWidth: 2,
+    //         tension: 0.35,
+    //         fill: true,
+
+    //         // ⭐ CLEAN MONITORING STYLE
+    //         pointRadius: 0,
+    //         pointHoverRadius: 3,
+    //         pointHitRadius: 10,
+    //       }]
+    //     },
+    //     options: {
+    //       responsive: true,
+    //       maintainAspectRatio: false,
+    //       interaction: {
+    //         mode: 'index',
+    //         intersect: false
+    //       },
+    //       plugins: {
+    //         legend: { display: false },
+    //         title: {
+    //           display: true,
+    //           text: unit,
+    //           font: { size: 12, weight: 'bold' }
+    //         },
+    //         tooltip: {
+    //           backgroundColor: '#0b1f33',
+    //           titleColor: '#ffffff',
+    //           bodyColor: '#ffffff',
+    //           titleFont: { size: 11 },
+    //           bodyFont: { size: 9 },
+    //           callbacks: {
+    //             title: (ctx) => {
+    //               const p = pts[ctx[0].dataIndex];
+    //               return `${p.user} — ${p.t.toLocaleString()}`;
+    //             },
+    //             label: (ctx) => `${unit}: ${ctx.formattedValue}`
+    //           }
+    //         }
+    //       },
+    //       scales: {
+    //         y: {
+    //           beginAtZero: false,
+    //           grid: { color: '#e6edf7' },
+    //           title: {
+    //             display: true,
+    //             text: unit,
+    //             font: { size: 11 }
+    //           },
+    //           ticks: {
+    //             font: { size: 9 }
+    //           }
+    //         },
+    //         x: {
+    //           grid: { display: false },
+    //           ticks: {
+    //             font: { size: 5 },
+    //             maxRotation: 45,
+    //             minRotation: 45,
+    //             autoSkip: true,
+    //             maxTicksLimit: 25
+    //           }
+    //         }
+    //       }
+    //     }
+    //   });
+    // }
+
+
+
+
+    function populateUsers() {
+      const box = document.getElementById('userBox');
+      const users = [...new Set(ALL_DATA.map(d => d.email).filter(Boolean))].sort();
+      box.innerHTML = users.map(u => `
+    <label><input type="checkbox" value="${u}" checked> ${u}</label>
+  `).join('');
+    }
+    function getSelectedUsers() {
+      return [...document.querySelectorAll('#userBox input:checked')].map(i => i.value);
+    }
+
+    function diff(curr, base) {
+      const d = (curr - base).toFixed(2);
+      if (d > 0) return `↑ +${d}`;
+      if (d < 0) return `↓ ${d}`;
+      return `= 0`;
+    }
+
+
+    function render(data) {
+      const main = document.getElementById('main');
+      main.innerHTML = '';
+
+      const emails = [...new Set(data.map(d => d.email).filter(Boolean))];
+      contextInfo.innerHTML =
+        `<div class="card pdf-section">
+          <strong>User(s):</strong> ${emails.join(', ') || 'N/A'}<br>
+     <strong>Generated:</strong> ${new Date().toLocaleString()}
+     </div>`;
+
+      const s = {
+        // VOIP
+        voipLat: seriesFor(data, ['voip', 'latencyMs']),
+        voipJit: seriesFor(data, ['voip', 'avgJitterMs']),
+        voipLoss: seriesFor(data, ['voip', 'lossPercent']),
+        voipMOS: seriesFor(data, ['voip', 'MOS']),
+        voipPktRecv: seriesFor(data, ['voip', 'packetsReceived']),
+        voipPktLost: seriesFor(data, ['voip', 'packetsLost']),
+        voipDcSample: seriesFor(data, ['voip', 'dcSamples']),
+
+        // LOCAL VIDEO
+        localStartup: seriesFor(data, ['local', 'startup']),
+        localStalls: seriesFor(data, ['local', 'stalls']),
+        localTotalStall: seriesFor(data, ['local', 'totalStall']),
+        localFreeze: seriesFor(data, ['local', 'freezeCount']),
+        localFreezeDur: seriesFor(data, ['local', 'freezeDuration']),
+        localBuf: seriesFor(data, ['local', 'avgBufferAhead']).map(p => ({ ...p, v: p.v * 1 })),
+        localMinBuf: seriesFor(data, ['local', 'minBufferAhead']),
+        localBufRatio: seriesFor(data, ['local', 'bufferRatio']),
+        localAvgStallDur: seriesFor(data, ['local', 'avgStallDuration']),
+
+        // YOUTUBE
+        ytStartup: seriesFor(data, ['youtube', 'startup']),
+        ytStalls: seriesFor(data, ['youtube', 'stalls']),
+        ytTotalStall: seriesFor(data, ['youtube', 'totalStall']),
+        ytFreeze: seriesFor(data, ['youtube', 'freezeCount']),
+        ytFreezeDur: seriesFor(data, ['youtube', 'freezeDuration']),
+        ytBuf: seriesFor(data, ['youtube', 'avgBufferAhead']).map(p => ({ ...p, v: p.v * 1 })),
+        ytMinBuf: seriesFor(data, ['youtube', 'minBufferAhead']),
+        ytMaxBuf: seriesFor(data, ['youtube', 'maxBufferAhead']),
+        ytBufRatio: seriesFor(data, ['youtube', 'bufferRatio']),
+
+        // SPEED
+        speedDL: seriesFor(data, ['speed', 'download']),
+        speedUL: seriesFor(data, ['speed', 'upload']),
+
+      };
+
+
+      main.innerHTML += `
+  
+  <div class="card pdf-section">
+<h3>Aggregated QoE Summary (Full Data)</h3>
+
+<h4>🎙 VoIP Metrics</h4>
+<div class="kpi-grid">
+  <div class="kpi"><div class="label">Latency</div><div class="value">${avg(s.voipLat)} ms</div></div>
+  <div class="kpi"><div class="label">Jitter</div><div class="value">${avg(s.voipJit)} ms</div></div>
+  <div class="kpi"><div class="label">Loss %</div><div class="value">${avg(s.voipLoss)} %</div></div>
+  <div class="kpi"><div class="label">MOS</div><div class="value">${avg(s.voipMOS)}</div></div>
+  <div class="kpi"><div class="label">Packets Received</div><div class="value">${avg(s.voipPktRecv)}</div></div>
+  <div class="kpi"><div class="label">Packets Lost</div><div class="value">${avg(s.voipPktLost)}</div></div>
+  <div class="kpi"><div class="label">DC Samples</div><div class="value">${avg(s.voipDcSample)}</div></div>
+</div>
+
+<h4>🎥 Local Video Metrics</h4>
+<div class="kpi-grid">
+  <div class="kpi"><div class="label">Startup</div><div class="value">${avg(s.localStartup)} ms</div></div>
+  <div class="kpi"><div class="label">Stalls</div><div class="value">${avg(s.localStalls)}</div></div>
+  <div class="kpi"><div class="label">Total Stall</div><div class="value">${avg(s.localTotalStall)} ms</div></div>
+  <div class="kpi"><div class="label">Freeze Count</div><div class="value">${avg(s.localFreeze)}</div></div>
+  <div class="kpi"><div class="label">Freeze Duration</div><div class="value">${avg(s.localFreezeDur)} ms</div></div>
+  <div class="kpi"><div class="label">Avg Buffer</div><div class="value">${avg(s.localBuf)} ms</div></div>
+  <div class="kpi"><div class="label">Min Buffer</div><div class="value">${avg(s.localMinBuf)}</div></div>
+  <div class="kpi"><div class="label">Buffer Ratio</div><div class="value">${avg(s.localBufRatio)}</div></div>
+  <div class="kpi"><div class="label">Avg Stall Duration</div><div class="value">${avg(s.localAvgStallDur)} ms</div></div>
+</div>
+
+<h4>▶ YouTube Metrics</h4>
+<div class="kpi-grid">
+  <div class="kpi"><div class="label">Startup</div><div class="value">${avg(s.ytStartup)} ms</div></div>
+  <div class="kpi"><div class="label">Stalls</div><div class="value">${avg(s.ytStalls)}</div></div>
+  <div class="kpi"><div class="label">Total Stall</div><div class="value">${avg(s.ytTotalStall)} ms</div></div>
+  <div class="kpi"><div class="label">Freeze Count</div><div class="value">${avg(s.ytFreeze)}</div></div>
+  <div class="kpi"><div class="label">Freeze Duration</div><div class="value">${avg(s.ytFreezeDur)} ms</div></div>
+  <div class="kpi"><div class="label">Avg Buffer</div><div class="value">${avg(s.ytBuf)} ms</div></div>
+  <div class="kpi"><div class="label">Min Buffer</div><div class="value">${avg(s.ytMinBuf)}</div></div>
+  <div class="kpi"><div class="label">Max Buffer</div><div class="value">${avg(s.ytMaxBuf)}</div></div>
+  <div class="kpi"><div class="label">Buffer Ratio</div><div class="value">${avg(s.ytBufRatio)}</div></div>
+</div>
+
+<h4>🚀 Speed Test</h4>
+<div class="kpi-grid">
+  <div class="kpi"><div class="label">Download</div><div class="value">${avg(s.speedDL)} Mbps</div></div>
+  <div class="kpi"><div class="label">Upload</div><div class="value">${avg(s.speedUL)} Mbps</div></div>
+</div>
+
+</div>
+
+  
+  <div class="card pdf-section"><h3>VoIP Performance</h3>
+    <div class="chart-box"><canvas id="voipLat"></canvas></div>
+    <div class="chart-box"><canvas id="voipJit"></canvas></div>
+  </div>
+
+  <div class="card pdf-section"><h3>Local Video Playback</h3>
+    <div class="chart-box"><canvas id="localStartup"></canvas></div>
+    <div class="chart-box"><canvas id="localBuf"></canvas></div>
+  </div>
+
+  <div class="card pdf-section"><h3>YouTube Streaming</h3>
+    <div class="chart-box"><canvas id="ytStartup"></canvas></div>
+    <div class="chart-box"><canvas id="ytBuf"></canvas></div>
+  </div>
+
+  <div class="card pdf-section"><h3>Speed Test</h3>
+    <div class="chart-box"><canvas id="spdDL"></canvas></div>
+    <div class="chart-box"><canvas id="spdUL"></canvas></div>
+  </div>`;
+
+      drawLine('voipLat', s.voipLat, 'Latency (ms)', '#3b82f6');
+      drawLine('voipJit', s.voipJit, 'Jitter (ms)', '#f59e0b');
+      drawLine('localStartup', s.localStartup, 'Startup (ms)', '#f97316');
+      drawLine('localBuf', s.localBuf, 'Buffer (ms)', '#10b981');
+      drawLine('ytStartup', s.ytStartup, 'Startup (ms)', '#8b5cf6');
+      drawLine('ytBuf', s.ytBuf, 'Buffer (ms)', '#6366f1');
+      drawLine('spdDL', s.speedDL, 'Download (Mbps)', '#06b6d4');
+      drawLine('spdUL', s.speedUL, 'Upload (Mbps)', '#22c55e');
+    }
+
+    function applyFilter() {
+      const users = getSelectedUsers();
+      const f = fromDate.value, t = toDate.value;
+      let d = [...ALL_DATA];
+      if (users.length) d = d.filter(x => users.includes(x.email));
+      if (f) { const s = new Date(f); s.setHours(0, 0, 0, 0); d = d.filter(x => new Date(x.ts) >= s) }
+      if (t) { const e = new Date(t); e.setHours(23, 59, 59, 999); d = d.filter(x => new Date(x.ts) <= e) }
+      render(d);
+    }
+
+    async function load() {
+      const r = await fetch(API_URL);
+      ALL_DATA = await r.json();
+      populateUsers();
+      loader.style.display = 'none';
+      render(ALL_DATA);
+    }
+    load();
+
+    /* ===== WORKING PDF EXPORT ===== */
+ async function exportPDF() {
+  const { jsPDF } = window.jspdf;
+  const pdf = new jsPDF('p', 'pt', 'a4');
+
+  const sections = document.querySelectorAll('.pdf-section');
+
+  const pdfWidth = pdf.internal.pageSize.getWidth();
+  const pdfHeight = pdf.internal.pageSize.getHeight();
+  const margin = 20;
+
+  let y = margin;
+
+  for (let section of sections) {
+
+    const canvas = await html2canvas(section, {
+      scale: 2,
+      useCORS: true,
+      backgroundColor: "#ffffff"
+    });
+
+    const imgData = canvas.toDataURL('image/png');
+    const imgHeight = canvas.height * (pdfWidth - margin * 2) / canvas.width;
+
+    // If section too tall for remaining space → new page
+    if (y + imgHeight > pdfHeight - margin) {
+      pdf.addPage();
+      y = margin;
+    }
+
+    pdf.addImage(imgData, 'PNG', margin, y, pdfWidth - margin * 2, imgHeight);
+    y += imgHeight + 20;
+  }
+
+  pdf.save('Network_QoE_Full_Report.pdf');
+}
+
+
+
+  </script>
+</body>
+
+</html>
