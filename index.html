@@ -182,6 +182,13 @@
       border-radius: 14px;
       box-shadow: 0 6px 20px rgba(0, 0, 0, .05);
     }
+
+    /* Added style for the toggle header */
+    .user-box-header {
+      border-bottom: 1px solid #eee;
+      margin-bottom: 8px;
+      padding-bottom: 4px;
+    }
   </style>
 </head>
 
@@ -195,7 +202,14 @@
       <div>
         <h2>Network QoE Dashboard</h2>
         <div class="small">Select one or multiple users</div>
-        <div id="userBox" class="user-box"></div>
+        <div class="user-box">
+          <div class="user-box-header">
+            <label style="font-weight: bold;">
+              <input type="checkbox" id="toggleAll" checked onclick="toggleAllUsers(this)"> Select/Unselect All
+            </label>
+          </div>
+          <div id="userBox"></div>
+        </div>
       </div>
 
       <div>
@@ -255,8 +269,6 @@
         backgroundColor: color,
         borderRadius: 4,
         barThickness: 10,
-
-        // 🔥 ensures tiny values still visible
         minBarLength: 8
       }]
     },
@@ -270,8 +282,6 @@
           text: unit,
           font: { size: 14, weight: 'bold' }
         },
-
-        // 🔥 SHOW VALUES ABOVE BARS
         tooltip: {
           callbacks: {
             label: ctx => `${ctx.raw} ${unit}`
@@ -282,13 +292,9 @@
       scales: {
         y: {
           beginAtZero: false,
-
-          // 🔥 ZOOM into data range
           min: min - range * 0.2,
           max: max + range * 0.25,
-
           title: { display: true, text: unit },
-
           ticks: {
             precision: 2
           }
@@ -304,7 +310,6 @@
       }
     },
 
-    // 🔥 DRAW VALUE LABELS ABOVE BARS
     plugins: [{
       id: 'valueLabels',
       afterDatasetsDraw(chart) {
@@ -325,100 +330,33 @@
   });
 }
 
-
-    //   function drawLine(id, pts, unit, color) {
-    //   const c = document.getElementById(id);
-    //   if (!c) return;
-    //   if (c._chart) c._chart.destroy();
-
-    //   c._chart = new Chart(c, {
-    //     type: 'line',
-    //     data: {
-    //       labels: pts.map(p => `${p.t.toLocaleString()} | ${p.user}`),
-    //       datasets: [{
-    //         label: unit,
-    //         data: pts.map(p => p.v),
-    //         borderColor: color,
-    //         backgroundColor: color + "22",
-    //         borderWidth: 2,
-    //         tension: 0.35,
-    //         fill: true,
-
-    //         // ⭐ CLEAN MONITORING STYLE
-    //         pointRadius: 0,
-    //         pointHoverRadius: 3,
-    //         pointHitRadius: 10,
-    //       }]
-    //     },
-    //     options: {
-    //       responsive: true,
-    //       maintainAspectRatio: false,
-    //       interaction: {
-    //         mode: 'index',
-    //         intersect: false
-    //       },
-    //       plugins: {
-    //         legend: { display: false },
-    //         title: {
-    //           display: true,
-    //           text: unit,
-    //           font: { size: 12, weight: 'bold' }
-    //         },
-    //         tooltip: {
-    //           backgroundColor: '#0b1f33',
-    //           titleColor: '#ffffff',
-    //           bodyColor: '#ffffff',
-    //           titleFont: { size: 11 },
-    //           bodyFont: { size: 9 },
-    //           callbacks: {
-    //             title: (ctx) => {
-    //               const p = pts[ctx[0].dataIndex];
-    //               return `${p.user} — ${p.t.toLocaleString()}`;
-    //             },
-    //             label: (ctx) => `${unit}: ${ctx.formattedValue}`
-    //           }
-    //         }
-    //       },
-    //       scales: {
-    //         y: {
-    //           beginAtZero: false,
-    //           grid: { color: '#e6edf7' },
-    //           title: {
-    //             display: true,
-    //             text: unit,
-    //             font: { size: 11 }
-    //           },
-    //           ticks: {
-    //             font: { size: 9 }
-    //           }
-    //         },
-    //         x: {
-    //           grid: { display: false },
-    //           ticks: {
-    //             font: { size: 5 },
-    //             maxRotation: 45,
-    //             minRotation: 45,
-    //             autoSkip: true,
-    //             maxTicksLimit: 25
-    //           }
-    //         }
-    //       }
-    //     }
-    //   });
-    // }
-
-
-
-
     function populateUsers() {
       const box = document.getElementById('userBox');
       const users = [...new Set(ALL_DATA.map(d => d.email).filter(Boolean))].sort();
       box.innerHTML = users.map(u => `
-    <label><input type="checkbox" value="${u}" checked> ${u}</label>
+    <label><input type="checkbox" value="${u}" class="user-checkbox" checked onchange="updateMasterToggle()"> ${u}</label>
   `).join('');
     }
+
+    // New Function: Handle the Master Select/Unselect All
+    function toggleAllUsers(source) {
+      const checkboxes = document.querySelectorAll('.user-checkbox');
+      checkboxes.forEach(cb => cb.checked = source.checked);
+    }
+
+    // New Function: Keep master toggle in sync if individual ones change
+    function updateMasterToggle() {
+      const master = document.getElementById('toggleAll');
+      const checkboxes = document.querySelectorAll('.user-checkbox');
+      const allChecked = Array.from(checkboxes).every(cb => cb.checked);
+      const anyChecked = Array.from(checkboxes).some(cb => cb.checked);
+      
+      master.checked = allChecked;
+      master.indeterminate = anyChecked && !allChecked;
+    }
+
     function getSelectedUsers() {
-      return [...document.querySelectorAll('#userBox input:checked')].map(i => i.value);
+      return [...document.querySelectorAll('.user-checkbox:checked')].map(i => i.value);
     }
 
     function diff(curr, base) {
@@ -441,7 +379,6 @@
      </div>`;
 
       const s = {
-        // VOIP
         voipLat: seriesFor(data, ['voip', 'latencyMs']),
         voipJit: seriesFor(data, ['voip', 'avgJitterMs']),
         voipLoss: seriesFor(data, ['voip', 'lossPercent']),
@@ -450,7 +387,6 @@
         voipPktLost: seriesFor(data, ['voip', 'packetsLost']),
         voipDcSample: seriesFor(data, ['voip', 'dcSamples']),
 
-        // LOCAL VIDEO
         localStartup: seriesFor(data, ['local', 'startup']),
         localStalls: seriesFor(data, ['local', 'stalls']),
         localTotalStall: seriesFor(data, ['local', 'totalStall']),
@@ -461,7 +397,6 @@
         localBufRatio: seriesFor(data, ['local', 'bufferRatio']),
         localAvgStallDur: seriesFor(data, ['local', 'avgStallDuration']),
 
-        // YOUTUBE
         ytStartup: seriesFor(data, ['youtube', 'startup']),
         ytStalls: seriesFor(data, ['youtube', 'stalls']),
         ytTotalStall: seriesFor(data, ['youtube', 'totalStall']),
@@ -472,7 +407,6 @@
         ytMaxBuf: seriesFor(data, ['youtube', 'maxBufferAhead']),
         ytBufRatio: seriesFor(data, ['youtube', 'bufferRatio']),
 
-        // SPEED
         speedDL: seriesFor(data, ['speed', 'download']),
         speedUL: seriesFor(data, ['speed', 'upload']),
 
@@ -564,7 +498,12 @@
       const users = getSelectedUsers();
       const f = fromDate.value, t = toDate.value;
       let d = [...ALL_DATA];
-      if (users.length) d = d.filter(x => users.includes(x.email));
+      if (users.length) {
+          d = d.filter(x => users.includes(x.email));
+      } else {
+          d = []; // If nothing selected, show nothing
+      }
+      
       if (f) { const s = new Date(f); s.setHours(0, 0, 0, 0); d = d.filter(x => new Date(x.ts) >= s) }
       if (t) { const e = new Date(t); e.setHours(23, 59, 59, 999); d = d.filter(x => new Date(x.ts) <= e) }
       render(d);
@@ -579,46 +518,32 @@
     }
     load();
 
-    /* ===== WORKING PDF EXPORT ===== */
  async function exportPDF() {
   const { jsPDF } = window.jspdf;
   const pdf = new jsPDF('p', 'pt', 'a4');
-
   const sections = document.querySelectorAll('.pdf-section');
-
   const pdfWidth = pdf.internal.pageSize.getWidth();
   const pdfHeight = pdf.internal.pageSize.getHeight();
   const margin = 20;
 
   let y = margin;
-
   for (let section of sections) {
-
     const canvas = await html2canvas(section, {
       scale: 2,
       useCORS: true,
       backgroundColor: "#ffffff"
     });
-
     const imgData = canvas.toDataURL('image/png');
     const imgHeight = canvas.height * (pdfWidth - margin * 2) / canvas.width;
-
-    // If section too tall for remaining space → new page
     if (y + imgHeight > pdfHeight - margin) {
       pdf.addPage();
       y = margin;
     }
-
     pdf.addImage(imgData, 'PNG', margin, y, pdfWidth - margin * 2, imgHeight);
     y += imgHeight + 20;
   }
-
   pdf.save('Network_QoE_Full_Report.pdf');
 }
-
-
-
   </script>
 </body>
-
 </html>
